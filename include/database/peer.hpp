@@ -1,0 +1,265 @@
+#pragma once
+
+#include <cmath> // @note std::floor
+#include "guard.hpp"
+#include <deque> // @note std::deque
+
+enum bgra : u_int
+{
+    BLUE  = 0xff000000,
+    GREEN = 0x00ff0000,
+    RED   = 0x0000ff00,
+    ALPHA = 0x000000ff
+};
+
+#include "database.hpp"
+
+/* id, count */
+struct slot {
+    slot(short _id = 0, short _count = 0) : id(_id), count(_count) {}
+    short id{};
+    short count{}; // @note total amount of that item
+
+    ::blob to_blob() const;
+};
+
+/* x, y */
+struct pos {
+    pos() = default;
+    pos(float _x, float _y) : x(_x), y(_y) {}
+    pos(int _x, int _y)     : x(_x), y(_y) {}
+    pos(u_int _x, u_int _y) : x(_x), y(_y) {} // @todo can this even be unsigned?
+
+    float x, y;
+
+    /* @param pixel 
+    *   true to divide by 32 pixels for true tile. 
+    *   false to multiply by 32 for percise position. 
+    */
+    pos by_32(bool pixel = false) const { 
+        return (pixel) ? 
+            pos{std::floor/*<auto>*/(x/32.0f), std::floor/*<auto>*/(y/32.0f)} : 
+            pos{x*32.0f, y*32.0f}; 
+    }
+
+    int x_int() const { return std::floor<int>(x); }
+    int y_int() const { return std::floor<int>(y); }
+
+    u_int x_u_int() const { return std::floor<u_int>(x); }
+    u_int y_u_int() const { return std::floor<u_int>(y); }
+
+    auto operator<=>(const pos&) const = default;
+};
+
+struct Billboard {
+    short id{0}; // @note the item they're selling
+    bool show{};
+    bool isBuying{};
+    int price{1};
+    bool perItem{}; // @note true if world locks per item, false if items per world lock
+};
+
+enum role : u_char {
+    PLAYER = 0,
+    VIP = 1,
+    GUARDIAN = 2,
+    MODERATOR = 3,
+    ADMINISTRATOR = 4
+};
+
+inline const char *role_name(u_char r)
+{
+    switch (r)
+    {
+        case VIP:          return "vip";
+        case GUARDIAN:     return "guardian";
+        case MODERATOR:    return "mod";
+        case ADMINISTRATOR:return "admin";
+        default:           return "player";
+    }
+}
+
+enum pstate : int
+{
+    S_GHOST       = 0x00000001,
+    S_DOUBLE_JUMP = 0x00000002,
+    S_DUCT_TAPE   = 0x00002000
+};
+
+class peer {
+public:
+    ~peer();
+
+    bool load(const std::string &growid, const std::string password);
+    bool load_by_uid(int uid);
+    bool create_account(const std::string &growid, const std::string &password);
+
+    bool exists(const std::string &growid);
+
+    template<typename T>
+    void mysql_insert(const std::string &column, const T &value);
+
+    template<typename T>
+    void mysql_update(const std::string &column, const T &value);
+
+    template<typename T>
+    T    mysql_select(const std::string &column, const std::string &arg = "", bool by_user_id = false); // @note by_user_id: WHERE uid instead of WHERE growid
+    void mysql_select_all(bool by_user_id = false);
+    void mysql_update_all();
+
+    int user_id{}; // @note unqiue user id.
+    std::string growid{""}, password{""};
+    std::time_t created_at{}; // @note when inserted in SQL (account age)
+    u_char role{};
+    int muted_until{}; // @note unix timestamp, 0 = not muted
+    std::string ban_reason{}; // @note empty = not banned
+    std::array<float, 10ull> clothing{}; // @note peer's clothing {id, clothing::}
+    u_char punch_effect{}; // @note last equipped clothing that has a effect. supporting 0-255 effects.
+
+    int netid{}; // @note peer's netid is world identity. this will be useful for many packet sending
+    u_char icon{}; // @note typing or busy icon
+    std::string display_growid{}; // @note use this for displaying growid, never use ::growid
+    std::string country{};
+    float game_version{0.0f};
+
+    u_int skin_color{ 2527912447 };
+    u_int hair_color = bgra::GREEN | bgra::GREEN | bgra::RED | bgra::ALPHA; // @note value declines for specfic hair colors
+
+    int state{}; // @note using pstate::
+
+    ::Billboard billboard{};
+
+    ::pos pos{}; // @note position 1D {x, y}
+    ::pos rest_pos{}; // @note respawn position {x, y}
+    bool facing_left{}; // @note peer is directed towards the left direction
+    short pain_hp{ 10 };
+
+    int slot_size{16}; // @note amount of slots this peer has | were talking total slots not itemed slots, to get itemed slots do slot.size()
+    std::vector<slot> slots{}; // @note an array of each slot. storing {id, count}
+    /*
+    * @brief set slot::count to nagative value if you want to remove an amount. 
+    * @return the remaining amount if exeeds 200. e.g. emplace(slot{0, 201}) returns 1.
+    */
+    u_short emplace(::slot slot);
+    /*
+    * @brief check if item exists in inventory (::slots)
+    * @return slot count (0 if not exist)
+    */
+    u_short have_slot(::slot slot);
+    ::blob serialize_inventory() const;
+
+    std::vector<short> fav{};
+
+    long long gems{0};
+    int wl_storage{0};
+    long long daily_last{0}; // @note day number of the last daily reward claim (see DAILY_RESET_OFFSET)
+    int daily_streak{0}; // @note consecutive days claimed
+    std::string rid{}; // @note device id sent by the client at login (empty if the client didn't send one)
+    int title_id{0}; // @note equipped title (title table), 0 = none
+    bool afk{false};
+    ::guard_state guard{}; // @note Sentinel (anti-cheat) memory, see tools/sentinel.hpp
+    std::array<u_short, 2ull> level{ 1, 0 }; // {level, xp} XP formula credits: https://www.growtopiagame.com/forums/member/553046-kasete
+    /*
+    * @brief add XP safely, this function also handles level up.
+    */
+    void add_xp(ENetEvent &event, u_short value);
+
+    /*
+    * @brief recalculate transient effects based on clothing.
+    */
+    void update_effects();
+
+    std::array<std::string, 6ull> recent_worlds{}; // @note recent worlds, a list of 6 worlds, once it reaches 7 it'll be replaced by the oldest
+    std::array<std::string, 200ull> my_worlds{}; // @note first 200 relevant worlds locked by peer.
+    
+    std::deque<u_int> messages; // @note last 5 que messages sent time, this is used to check for spamming
+
+    u_short fires_removed{};
+    u_short gbc_pity{}; // @note GBC pity; for each 100 will receive super GBC
+
+    /* @todo move outside */
+    std::vector<::slot> trade_offers{};
+    bool trade_accepted = false;
+};
+
+extern ENetHost* host;
+
+/* @brief search specific peer(s), used in peers() */
+enum class PeerSearch : u_char
+{
+    WORLD = 0,
+    EVERYONE = 1
+};
+template <typename Func>
+void peers(const std::string &world, PeerSearch search, Func &&fun)
+{
+    for (ENetPeer *peer = host->peers, *end = peer + host->peerCount; peer != end; ++peer)
+    {
+        if (peer->state != ENET_PEER_STATE_CONNECTED) continue;
+
+        if (search == PeerSearch::WORLD)
+        {
+            ::peer *pPeer = static_cast<::peer*>(peer->data);
+            if (pPeer->netid == 0 || (pPeer->recent_worlds.back() != world)) continue;
+        }
+        std::forward<Func>(fun)(peer);
+    }
+}
+
+extern void safe_disconnect_peers(int signal);
+
+class gameMessage {
+    public:
+        int packet_create{ 03 }; // @note NET_MESSAGE_GAME_MESSAGE
+
+        std::string message{};
+        u_char terminator{ '\0' };
+};
+
+extern ::blob compressMessage(const gameMessage &gameMessage);
+
+enum class gamePacketState : int
+{
+    UPDATE               = 0x00000004,
+    EXTENDED             = 0x00000008,
+    MOVE_LEFT            = 0x00000010,
+    MOVE_RIGHT           = 0x00000020,
+    HIT_BY_LAVA          = 0x00000040,
+    JUMP                 = 0x00000080,
+    ITEM_ACTIVATE_OBJECT = 0x00004000
+};
+class gamePacket {
+public:
+    int packet_create{ 04 }; // @note NET_MESSAGE_GAME_PACKET
+
+    int type{};
+    union
+    {
+        int netid{},
+            particle_effect;
+    };
+    int uid{}; // @todo understand this better @note so far I think this holds uid value
+    int state{}; // @note enum gamePacketState
+    union
+    {
+        float count{},
+              waterspeed;
+    };
+    union
+    {
+        int id{},
+            delay;
+    };
+    ::pos pos{}; // @note position 1D {x, y}
+    ::pos speed{}; // @note player movement (velocity(x), gravity(y)), higher gravity = smaller jumps
+    float idk{};
+    ::pos punch{}; // @note punching/placing position 2D {x, y}
+    u_int size{};
+};
+
+extern gamePacket make_gamePacket(const enet_uint8 *data);
+
+/* put it back into it's original form */
+extern ::blob compress_state(const gamePacket &gamePacket);
+
+extern void send_inventory_state(ENetEvent &event);
