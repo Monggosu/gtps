@@ -4,7 +4,6 @@ build/
 # lingering files
 main.out
 main.exe
-items.dat
 server_data.php
 mysql_login.txt
 
@@ -13,3 +12,10 @@ mysql_login.txt
 
 # Zed - once i fully understand how use it i'll publish tasks.json and debug.json
 .zed/
+
+# generated on each machine
+.gurotopia_db_password
+.gurotopia_account_password
+hosts-hp.txt
+server.log
+crash_report.txt
